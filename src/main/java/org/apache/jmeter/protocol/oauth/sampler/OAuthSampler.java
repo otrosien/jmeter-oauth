@@ -1,6 +1,6 @@
 /****************************************************************************
- * Copyright (c) 1998-2010 AOL Inc. 
- * 
+ * Copyright (c) 1998-2010 AOL Inc.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -66,30 +66,30 @@ import org.apache.log.Logger;
 /**
  * A sampler for OAuth request. It's based on HTTPSampler2 (HTTPClient).
  * This sampler adds OAuth signing to the request on the fly. Optionally,
- * it can also add OAuth parameters in Authorization header. 
- * 
+ * it can also add OAuth parameters in Authorization header.
+ *
  * <p/>It supports both HMAC-SHA1 and RSA-SHA1 algorithms. When RSA is
- * used, the private key in PEM format is needed. The file should be 
+ * used, the private key in PEM format is needed. The file should be
  * located in the same directory as test plan if relative directory is
- * given. PLAIN is not support since the request can be done with 
+ * given. PLAIN is not support since the request can be done with
  * regular HTTP sampler.
- * 
+ *
  * <p/>This sampler supports all HTTP sampler features except multi-part
- * file post. Currently, OAuth only supports signing of form post. This 
+ * file post. Currently, OAuth only supports signing of form post. This
  * may be supported in the future with OAuth body-signing extension.
- * 
- * <p/>Because OAuth returns 401 on error so it behaves like HTTP auth. 
+ *
+ * <p/>Because OAuth returns 401 on error so it behaves like HTTP auth.
  * There may be warinings in log file about unsupported HTTP auth schemes.
  * You can safely ignore these warnings.
- * 
+ *
  * @author zhang
- *   
+ *
  */
 public class OAuthSampler extends HTTPSampler2 {
 
 	private static final long serialVersionUID = -4557727434430190220L;
 	private static final Logger log = LoggingManager.getLoggerForClass();
-	
+
 	// Parameter names
 	public static final String KEY = "OAuthSampler.consumer_key"; //$NON-NLS-1$
 	public static final String SECRET = "OAuthSampler.consumer_secret"; //$NON-NLS-1$
@@ -101,23 +101,23 @@ public class OAuthSampler extends HTTPSampler2 {
 
 	// Parameter vlaues
 	public static final String HMAC = "HMAC-SHA1"; //$NON-NLS-1$
-	public static final String RSA = "RSA-SHA1"; //$NON-NLS-1$	
-	public static final String DEFAULT_METHOD = HMAC; 
+	public static final String RSA = "RSA-SHA1"; //$NON-NLS-1$
+	public static final String DEFAULT_METHOD = HMAC;
     // Supported methods:
     public static final String [] METHODS = {
         DEFAULT_METHOD, // i.e. HMAC-SHA1
-        RSA 
+        RSA
     };
 
-    protected OAuthMessage message;
+    protected ThreadLocal<OAuthMessage> message;
     protected boolean useAuthHeader;
     // When header is used, this contains remaining parameters to be sent
-    protected List<Map.Entry<String, String>> nonOAuthParams = null;
- 
+    protected ThreadLocal<List<Map.Entry<String, String>>> nonOAuthParams;
+
     /**
 	 * Constructor for the OAuthSampler object. The HTTP sampler factory
 	 * is not used for this plugin.
-     * 
+     *
 	 */
 	public OAuthSampler() {
 		super();
@@ -130,7 +130,7 @@ public class OAuthSampler extends HTTPSampler2 {
 	 * <p>
 	 * When getting a redirect target, redirects are not followed and resources
 	 * are not downloaded. The caller will take care of this.
-	 * 
+	 *
 	 * @param url
 	 *            URL to sample
 	 * @param method
@@ -151,18 +151,19 @@ public class OAuthSampler extends HTTPSampler2 {
 
 		HTTPSampleResult res = new HTTPSampleResult();
 		res.setMonitor(isMonitor());
-        
+
 		// Handles OAuth signing
 		try {
-			message = getOAuthMessage(url, method);
-
+			OAuthMessage message = getOAuthMessage(url, method);
+			this.message = new ThreadLocal<OAuthMessage>();
+			this.message.set(message);
 			urlStr = message.URL;
 
 			if (isPost) {
 				urlStr = message.URL;
 			} else {
 				if (useAuthHeader)
-					urlStr = OAuth.addParameters(message.URL, nonOAuthParams);
+					urlStr = OAuth.addParameters(message.URL, nonOAuthParams.get());
 				else
 					urlStr = OAuth.addParameters(message.URL, message
 							.getParameters());
@@ -171,7 +172,7 @@ public class OAuthSampler extends HTTPSampler2 {
 			res.sampleEnd();
 			HTTPSampleResult err = errorResult(e, res);
 			err.setSampleLabel("Error: " + url.toString()); //$NON-NLS-1$
-			return err;		
+			return err;
 		} catch (OAuthException e) {
 			res.sampleEnd();
 			HTTPSampleResult err = errorResult(e, res);
@@ -183,7 +184,7 @@ public class OAuthSampler extends HTTPSampler2 {
 			err.setSampleLabel("Error: " + url.toString()); //$NON-NLS-1$
 			return err;
 		}
-		
+
 		log.debug("Start : sample " + urlStr); //$NON-NLS-1$
 		log.debug("method " + method); //$NON-NLS-1$
 
@@ -214,14 +215,14 @@ public class OAuthSampler extends HTTPSampler2 {
 				log.error("Unexpected method (converted to GET): "+method); //$NON-NLS-1$
 			    httpMethod = new GetMethod(urlStr);
 			}
-	
+
 			// Set any default request headers
 			setDefaultRequestHeaders(httpMethod);
             // Setup connection
 			client = setupConnection(new URL(urlStr), httpMethod, res);
 			// Handle POST and PUT
 			if (isPost) {
-				String postBody = sendPostData(httpMethod);				
+				String postBody = sendPostData(httpMethod);
 				res.setQueryString(postBody);
 			}
 
@@ -231,16 +232,16 @@ public class OAuthSampler extends HTTPSampler2 {
 
 			// Request sent. Now get the response:
             instream = httpMethod.getResponseBodyAsStream();
-            
+
             if (instream != null) {// will be null for HEAD
-            
+
                 Header responseHeader = httpMethod.getResponseHeader(HEADER_CONTENT_ENCODING);
                 if (responseHeader!= null && ENCODING_GZIP.equals(responseHeader.getValue())) {
                     instream = new GZIPInputStream(instream);
                 }
                 res.setResponseData(readResponse(res, instream, (int) httpMethod.getResponseContentLength()));
             }
-            
+
 			res.sampleEnd();
 			// Done with the sampling proper.
 
@@ -248,14 +249,14 @@ public class OAuthSampler extends HTTPSampler2 {
 
 			res.setSampleLabel(httpMethod.getURI().toString());
             // Pick up Actual path (after redirects)
-            
+
 			res.setResponseCode(Integer.toString(statusCode));
 			res.setSuccessful(isSuccessCode(statusCode));
 
 			res.setResponseMessage(httpMethod.getStatusText());
 
 			String ct = null;
-			org.apache.commons.httpclient.Header h 
+			org.apache.commons.httpclient.Header h
                 = httpMethod.getResponseHeader(HEADER_CONTENT_TYPE);
 			if (h != null)// Can be missing, e.g. on redirect
 			{
@@ -277,10 +278,10 @@ public class OAuthSampler extends HTTPSampler2 {
             if (getAutoRedirects()){
                 res.setURL(new URL(httpMethod.getURI().toString()));
             }
-            
+
 			// Store any cookies received in the cookie manager:
 			saveConnectionCookies(httpMethod, res.getURL(), getCookieManager());
-			
+
 			// Save cache information
             final CacheManager cacheManager = getCacheManager();
             if (cacheManager != null){
@@ -323,17 +324,17 @@ public class OAuthSampler extends HTTPSampler2 {
 	/**
 	 * With OAuth, the query string has to be attached later after
 	 * signing so empty string is returned here.
-	 * 
+	 *
 	 */
 
 	public String getQueryString(String contentEncoding) {
 		return ""; //$NON-NLS-1$
 	}
 
-    
+
     /**
      * Add Authorization header if useAuthHeader is true.
-     * 
+     *
      * @param httpMethod the HttpMethod used for the request
      */
 	protected void setDefaultRequestHeaders(HttpMethod httpMethod) {
@@ -342,7 +343,7 @@ public class OAuthSampler extends HTTPSampler2 {
 			return;
 
 		try {
-			httpMethod.addRequestHeader("Authorization", message //$NON-NLS-1$
+			httpMethod.addRequestHeader("Authorization", message.get() //$NON-NLS-1$
 					.getAuthorizationHeader(null));
 
 		} catch (IOException e) {
@@ -351,10 +352,10 @@ public class OAuthSampler extends HTTPSampler2 {
 	}
 
 
-	
+
 	/*
 	 * Send POST data from <code>Entry</code> to the open connection.
-	 * 
+	 *
 	 * @param connection
 	 *            <code>URLConnection</code> where POST data should be sent
      * @return a String show what was posted. Will not contain actual file upload content
@@ -362,41 +363,41 @@ public class OAuthSampler extends HTTPSampler2 {
 	 *                if an I/O exception occurs
 	 */
 	private String sendPostData(HttpMethod method) throws IOException {
- 
+
 		String form;
 //        log.debug("arguements: " + getArguments().getArgumentCount());
 //        log.debug("arguements: " + getArguments().getArgument(0).getValue());
-		if (useAuthHeader) {    
-		    if (getArguments().getArgumentCount() == 1 
+		if (useAuthHeader) {
+		    if (getArguments().getArgumentCount() == 1
 	                && (getArguments().getArgument(0).getName() == null || "".equals(getArguments().getArgument(0).getName()))) {
 		        form = getArguments().getArgument(0).getValue();
-		    } else {		    
-		        form = OAuth.formEncode(nonOAuthParams);
+		    } else {
+		        form = OAuth.formEncode(nonOAuthParams.get());
 		    }
-        } else {            
-        	form = OAuth.formEncode(message.getParameters());
+        } else {
+        	form = OAuth.formEncode(message.get().getParameters());
         	method.addRequestHeader(HEADER_CONTENT_TYPE, OAuth.FORM_ENCODED);
         }
-        
+
         method.addRequestHeader(HEADER_CONTENT_LENGTH, form.length() + ""); //$NON-NLS-1$
-       
+
         if (method instanceof PostMethod || method instanceof PutMethod) {
 
         	StringRequestEntity requestEntity = new StringRequestEntity(
             		form, OAuth.FORM_ENCODED, OAuth.ENCODING);
-            
+
             ((EntityEnclosingMethod)method).setRequestEntity(requestEntity);
         } else {
         	log.error("Logic error, method must be POST or PUT to send body"); //$NON-NLS-1$
         }
-        
-        return form;     
+
+        return form;
 	}
-	
+
 	/**
 	 * Create OAuth message. The message contains all HTTP arguments and
 	 * OAuth parameters and the signature.
-	 * 
+	 *
 	 * @param url
 	 * @param method
 	 * @return
@@ -404,36 +405,36 @@ public class OAuthSampler extends HTTPSampler2 {
 	 * @throws OAuthException
 	 * @throws URISyntaxException
 	 */
-    protected OAuthMessage getOAuthMessage(URL url, String method) 
+    protected OAuthMessage getOAuthMessage(URL url, String method)
     	throws IOException, OAuthException, URISyntaxException {
- 
+
 		useAuthHeader = getPropertyAsBoolean(USE_AUTH_HEADER);
-		
+
     	// Get OAuth accessor
-	    
-    	String consumerKey = getPropertyAsString(KEY);   	
+
+    	String consumerKey = getPropertyAsString(KEY);
     	String signatureMethod = getPropertyAsString(SIGNATURE_METHOD);
     	String secretOrKey = getPropertyAsString(SECRET);
-          	
+
 		final OAuthConsumer consumer;
-    	if (RSA.equals(signatureMethod)) {  		
+    	if (RSA.equals(signatureMethod)) {
     		consumer = new OAuthConsumer(null, consumerKey, null, null);
     		PrivateKeyReader reader = new PrivateKeyReader(secretOrKey);
-    		PrivateKey key = reader.getPrivateKey();    
-    		consumer.setProperty(RSA_SHA1.PRIVATE_KEY, key);   		    
+    		PrivateKey key = reader.getPrivateKey();
+    		consumer.setProperty(RSA_SHA1.PRIVATE_KEY, key);
     	} else {
        		consumer = new OAuthConsumer(null, consumerKey, secretOrKey, null);
     	}
-		
+
 	    final OAuthAccessor accessor = new OAuthAccessor(consumer);
 	    accessor.accessToken = getDecodedProperty(TOKEN);
 	    accessor.tokenSecret = getDecodedProperty(TOKEN_SECRET);
 
     	// Convert arguments to OAuth parameters, URL-decoded if already encoded.
-	    List<OAuth.Parameter> list = 
+	    List<OAuth.Parameter> list =
 	    	new ArrayList<OAuth.Parameter>(getArguments().getArgumentCount());
-	    
-	    if (!(getArguments().getArgumentCount() == 1 
+
+	    if (!(getArguments().getArgumentCount() == 1
 	            && (getArguments().getArgument(0).getName() == null || "".equals(getArguments().getArgument(0).getName())))) {
     		PropertyIterator args = getArguments().iterator();
     		while (args.hasNext()) {
@@ -443,7 +444,7 @@ public class OAuthSampler extends HTTPSampler2 {
     			if (!arg.isAlwaysEncoded()) {
                     String urlContentEncoding = getContentEncoding();
                     if(urlContentEncoding == null || urlContentEncoding.length() == 0) {
-                        // Use the default encoding for urls 
+                        // Use the default encoding for urls
                         urlContentEncoding = EncoderCache.URL_ARGUMENT_ENCODING;
                     }
     				parameterName = URLDecoder.decode(parameterName,
@@ -451,7 +452,7 @@ public class OAuthSampler extends HTTPSampler2 {
     				parameterValue = URLDecoder.decode(parameterValue,
     						urlContentEncoding);
     			}
-    
+
     		   	list.add(new Parameter(parameterName, parameterValue));
     		}
 	    }
@@ -462,33 +463,34 @@ public class OAuthSampler extends HTTPSampler2 {
 	       }
 	    });
     	OAuthMessage message = new OAuthMessage(method, url.toExternalForm(), list);
-	    
+
 	    message.addParameter(OAuth.OAUTH_SIGNATURE_METHOD,
 	    		getPropertyAsString(SIGNATURE_METHOD));
-	    
+
 	    if (accessor.accessToken != null && accessor.accessToken.length() > 0) {
 	    	message.addParameter(OAuth.OAUTH_TOKEN, accessor.accessToken);
 	    } else {
 	        message.addParameter(OAuth.OAUTH_TOKEN, "");
 	    }
-	    
+
     	// Sign the message
     	message.addRequiredParameters(accessor);
 
     	if (log.isDebugEnabled()) {
-    		String baseString = OAuthSignatureMethod.getBaseString(message);  
+    		String baseString = OAuthSignatureMethod.getBaseString(message);
     		log.debug("OAuth base string : '" + baseString + "'");  //$NON-NLS-1$//$NON-NLS-2$
-    		// It's probably ok to expose token secret 
+    		// It's probably ok to expose token secret
     		log.debug("OAuth token secret : '" + accessor.tokenSecret + "'");  //$NON-NLS-1$//$NON-NLS-2$
     	}
- 
+
     	if (useAuthHeader) {
 			// Find the non-OAuth parameters:
 			List<Map.Entry<String, String>> others = message.getParameters();
 			if (others != null && !others.isEmpty()) {
-				nonOAuthParams = new ArrayList<Map.Entry<String, String>>(
-						others);
-				for (Iterator<Map.Entry<String, String>> p = nonOAuthParams
+				this.nonOAuthParams = new ThreadLocal<List<Map.Entry<String, String>>>();
+				this.nonOAuthParams.set(new ArrayList<Map.Entry<String, String>>(
+						others));
+				for (Iterator<Map.Entry<String, String>> p = nonOAuthParams.get()
 						.iterator(); p.hasNext();) {
 					if (p.next().getKey().startsWith("oauth_")) { //$NON-NLS-1$
 						p.remove();
@@ -499,32 +501,32 @@ public class OAuthSampler extends HTTPSampler2 {
 
     	return message;
     }
-    
+
     /**
      * Get property as string. If "Encode?" is not checked,
      * the property is decoded to prevent double-encoding.
-     * 
+     *
      * @param name Parameter name
      * @return
      */
     private String getDecodedProperty(String name) {
 
     	String raw = getPropertyAsString(name);
-    	
+
     	if (getPropertyAsBoolean(URL_ENCODE))
     		return raw;
-    	
-    	/* 
+
+    	/*
     	 * If the parameters doesn't need URL encode, which means
     	 * it's already encoded. It should be decoded.
     	 */
- 			
+
         String urlContentEncoding = getContentEncoding();
         if(urlContentEncoding == null || urlContentEncoding.length() == 0) {
-                // Use the default encoding for urls 
+                // Use the default encoding for urls
                 urlContentEncoding = EncoderCache.URL_ARGUMENT_ENCODING;
         }
-			
+
         try {
 			return URLDecoder.decode(raw, urlContentEncoding);
 		} catch (UnsupportedEncodingException e) {
